@@ -169,12 +169,23 @@
                     const aStr = `${t} = \\frac{3${v}}{B}`;
                     return { q, aStr, choices: [aStr, `${t} = 3${v}B`, `${t} = \\frac{${v}}{3B}`, `B = \\frac{3${v}}{${t}}`] };
                 } else {
-                    const d1 = r(2, 4), d2 = r(2, 4);
-                    const q = `\\frac{x+${r(2,3)}y}{${d1}} - \\frac{${r(2,3)}x-y}{${d2}} \\text{ を計算せよ}`;
-                    const common = d1 * d2;
-                    const resA = r(-5, 5), resB = r(2, 10);
-                    const ans = `\\frac{${fmt(resA,"x")}${fmtS(resB,"y")}}{${common}}`;
-                    return { q, aStr: ans, choices: [ans, `\\frac{x+${resB}y}{${common}}`, `\\frac{${resA}x-y}{${common}}`, `0`] };
+                    // 分数式の計算（ボスレベル）
+                    const d1 = r(2, 3); // 分母1
+                    const d2 = (d1 === 2) ? 3 : 2; // 分母2（異なる分母を通分させる）
+                    const common = d1 * d2; // 最小公倍数
+                    
+                    const x1 = r(1, 3), y1 = r(1, 4) * rS();
+                    const x2 = r(1, 3), y2 = r(1, 4) * rS();
+                    
+                    // q = (x1*x + y1*y)/d1 - (x2*x + y2*y)/d2
+                    const q = `\\frac{${fmt(x1,"x")}${fmtS(y1,"y")}}{${d1}} - \\frac{${fmt(x2,"x")}${fmtS(y2,"y")}}{${d2}} \\text{ を計算せよ}`;
+                    
+                    // 計算: (d2*x1 - d1*x2)x + (d2*y1 - d1*y2)y
+                    const resX = d2 * x1 - d1 * x2;
+                    const resY = d2 * y1 - d1 * y2;
+                    
+                    const aStr = `\\frac{${fmt(resX,"x")}${fmtS(resY,"y")}}{${common}}`;
+                    return { q, aStr, choices: [aStr, `\\frac{${fmt(resX+1,"x")}${fmtS(resY,"y")}}{${common}}`, `\\frac{${fmt(resX,"x")}${fmtS(resY+1,"y")}}{${common}}`, `\\frac{${fmt(d2*x1+d1*x2,"x")}${fmtS(d2*y1+d1*y2,"y")}}{${common}}`] };
                 }
             }
             const type = r(0, 3);
