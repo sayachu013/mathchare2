@@ -30,6 +30,12 @@
         .btn-challenge { background: var(--boss); color: white; width: 100%; margin-top: 15px; border: 2px solid #fff; }
         .log-area { background: #000; padding: 15px; border-radius: 10px; font-family: monospace; font-size: 0.75rem; max-height: 250px; overflow-y: auto; margin-top: 15px; color: #94a3b8; border: 1px solid #334155; }
         .hidden { display: none !important; }
+
+        /* 追加スタイル */
+        .selection-panel { background: rgba(168, 85, 247, 0.1); border: 1px solid var(--boss); border-radius: 15px; padding: 15px; margin-top: 15px; text-align: left; }
+        .selection-panel h3 { margin-top: 0; font-size: 1rem; color: var(--boss); text-align: center; }
+        .check-item { display: flex; align-items: center; margin: 8px 0; cursor: pointer; font-size: 1rem; }
+        .check-item input { margin-right: 12px; transform: scale(1.3); }
     </style>
 </head>
 <body onload="initApp()">
@@ -42,7 +48,16 @@
             <button id="btn-shiki" class="btn btn-main" onclick="startGame('shiki')">中2 式の計算</button>
             <button id="btn-renritsu" class="btn btn-main" onclick="startGame('renritsu')">中2 連立方程式</button>
             <button id="btn-kansuu" class="btn btn-main" onclick="startGame('kansuu')">中2 一次関数</button>
-            <button id="btn-challenge" class="btn btn-challenge" onclick="startGame('challenge')">🔥 全単元ボスチャレンジ 🔥</button>
+            
+            <button id="btn-challenge-toggle" class="btn btn-challenge" onclick="toggleBossSelection()">🔥 ボスチャレンジ設定 🔥</button>
+            
+            <div id="boss-selection" class="selection-panel hidden">
+                <h3>挑戦する単元を選択</h3>
+                <label class="check-item"><input type="checkbox" class="boss-check" value="shiki" checked> 式の計算</label>
+                <label class="check-item"><input type="checkbox" class="boss-check" value="renritsu" checked> 連立方程式</label>
+                <label class="check-item"><input type="checkbox" class="boss-check" value="kansuu" checked> 一次関数</label>
+                <button id="btn-challenge" class="btn btn-challenge" style="margin-top:10px;" onclick="startGame('challenge')">開始！</button>
+            </div>
         </div>
     </div>
 
@@ -54,11 +69,12 @@
         <div class="hp-container"><div id="hp-fill"></div></div>
         <div class="timer-container" id="timer">03:00</div>
         
-        <div class="display-area">
+        <div class="display-area" id="main-display">
             <div id="combo" class="combo-badge">0 COMBO!</div>
             <div id="boss-label" class="hidden" style="color:var(--boss); font-weight:bold; margin-bottom:10px; font-size:1.4rem;">⚠️ ULTRA BOSS WARNING ⚠️</div>
             <div id="question-text" style="font-size:1.2rem; text-align:center; line-height:1.6; width:100%;"></div>
-            <div style="font-size:0.9rem; color:var(--accent); margin-top:20px;">解を求めて選択肢を表示</div>
+            <div id="guide-text" style="font-size:0.9rem; color:var(--accent); margin-top:20px;">解を求めて選択肢を表示</div>
+            <div id="hidden-msg" class="hidden" style="font-size:1.5rem; font-weight:bold; color:var(--primary); opacity:0.5;">? ? ?</div>
         </div>
 
         <button id="btn-show-choices" class="btn btn-main" onclick="showChoices()">選択肢を表示</button>
@@ -76,17 +92,24 @@
 </div>
 
 <script>
-    let state = { hp: 100, combo: 0, timeLeft: 180, timer: null, currentQ: null, isLocked: false, correctCount: 0, mode: '', isBoss: false, history: [] };
+    let state = { hp: 100, combo: 0, timeLeft: 180, timer: null, currentQ: null, isLocked: false, correctCount: 0, mode: '', isBoss: false, history: [], selectedBossModes: [] };
     const AVAILABLE_MODES = ['shiki', 'renritsu', 'kansuu'];
 
     function initApp() { checkAchievements(); }
     function checkAchievements() {
         [...AVAILABLE_MODES, 'challenge'].forEach(m => {
             if(sessionStorage.getItem('clear_' + m)) {
-                const btn = document.getElementById('btn-' + m);
+                // ボスチャレンジのボタンIDはトグル用ボタンに合わせる
+                const btnId = (m === 'challenge') ? 'btn-challenge-toggle' : 'btn-' + m;
+                const btn = document.getElementById(btnId);
                 if(btn) { btn.classList.add('btn-cleared'); if(!btn.innerHTML.includes('👑')) btn.innerHTML += ' 👑'; }
             }
         });
+    }
+
+    function toggleBossSelection() {
+        const panel = document.getElementById('boss-selection');
+        panel.classList.toggle('hidden');
     }
 
     function toFrac(val) {
@@ -100,148 +123,193 @@
         return (n < 0 ? "-" : "") + "\\frac{" + Math.abs(n) + "}{" + Math.abs(d) + "}";
     }
 
-    // 係数1の省略対応
     function fmt(c, v = "") {
         if (c === 0) return "";
-        if (v === "") return c.toString(); // 変数がない場合は数字をそのまま出す
+        if (v === "") return toFrac(c);
         if (c === 1) return v;
         if (c === -1) return "-" + v;
-        return c + v;
+        return toFrac(c) + v;
     }
 
-    // 符号付き・係数1の省略対応
     function fmtS(c, v = "") {
         if (c === 0) return "";
-        if (v === "") return (c > 0 ? "+" : "") + c;
+        const frac = toFrac(c);
+        if (v === "") return (c > 0 ? "+" : "") + frac;
         if (c === 1) return "+" + v;
         if (c === -1) return "-" + v;
-        return (c > 0 ? "+" : "") + c + v;
+        return (c > 0 ? "+" : "") + frac + v;
     }
 
-    // 1次関数の式生成（約分1の対応含む）
     function fmtEq(aStr, b) {
-        // aStrが "1" や "-1" の文字列で渡されるケースに対応
         let aPart = aStr;
         if (aStr === "1") aPart = "";
-        if (aStr === "-1") aPart = "-";
+        else if (aStr === "-1") aPart = "-";
         
-        let bPart = fmtS(b);
+        let bPart = "";
+        if (typeof b === "number") {
+            bPart = b !== 0 ? fmtS(b) : "";
+        } else {
+            bPart = (b.startsWith("-") ? b : "+" + b);
+            if (b === "0" || b === "") bPart = "";
+        }
         return `y = ${aPart}x${bPart}`;
     }
 
     const generators = {
         shiki: (isBoss) => {
-            const r = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+            const r = (min, max) => {
+                let res = Math.floor(Math.random() * (max - min + 1)) + min;
+                return res === 0 ? r(min, max) : res;
+            };
             const rS = () => (Math.random() > 0.5 ? 1 : -1);
             if (isBoss) {
-                const vars = ["h", "r", "a", "b"];
-                const target = vars[r(0, 3)];
-                const q = `S = \\frac{1}{2}${target}c \\text{ を } [${target}] \\text{ について解け}`;
-                return { q, aStr: `${target} = \\frac{2S}{c}`, choices: [`${target} = \\frac{2S}{c}`, `${target} = 2Sc`, `${target} = \\frac{S}{2c}`, `c = \\frac{2S}{${target}}`] };
+                const vars = ["V", "S", "L"];
+                const targetVars = ["h", "r", "a"];
+                const v = vars[r(0, 2)];
+                const t = targetVars[r(0, 2)];
+                const q = `${v} = \\frac{1}{3}${t}B \\text{ を } [${t}] \\text{ について解け}`;
+                const aStr = `${t} = \\frac{3${v}}{B}`;
+                return { q, aStr, choices: [aStr, `${t} = 3${v}B`, `${t} = \\frac{${v}}{3B}`, `B = \\frac{3${v}}{${t}}`] };
             }
-            const type = r(0, 2);
+            const type = r(0, 3);
             if (type === 0) {
-                const a1=r(2,5), b1=r(2,5)*rS(), a2=r(1,3)*rS(), b2=r(1,3)*rS();
-                const q = `(${fmt(a1,"x")}${fmtS(b1,"y")}) + (${fmt(a2,"x")}${fmtS(b2,"y")})`;
-                const aStr = `${fmt(a1+a2,"x")}${fmtS(b1+b2,"y")}` || "0";
-                return { q, aStr, choices: [aStr, `${fmt(a1-a2,"x")}${fmtS(b1-b2,"y")}`, `${fmt(a1+a2,"x")}`, "0"] };
+                let a1=r(2,7), b1=r(2,7)*rS(), a2=r(1,5)*rS(), b2=r(1,5)*rS();
+                const isMinus = Math.random() > 0.5;
+                const resA = isMinus ? a1-a2 : a1+a2;
+                const resB = isMinus ? b1-b2 : b1+b2;
+                if (resA === 0 || resB === 0) return generators.shiki(false);
+                const q = `(${fmt(a1,"x")}${fmtS(b1,"y")}) ${isMinus ? '-' : '+'} (${fmt(a2,"x")}${fmtS(b2,"y")})`;
+                const aStr = `${fmt(resA,"x")}${fmtS(resB,"y")}`;
+                return { q, aStr, choices: [aStr, `${fmt(a1+a2,"x")}${fmtS(b1-b2,"y")}`, `${fmt(a1,"x")}${fmtS(b2,"y")}`, "1"] };
             } else if (type === 1) {
-                const a=r(2,4), b=r(2,3);
-                const q = `${fmt(a,"x")} \\times ${fmt(b,"xy")}`;
-                const aStr = `${a*b}x^{2}y`;
-                return { q, aStr, choices: [aStr, `${a+b}x^{2}y`, `${a*b}xy^{2}`, `${a*b}x^{2}`] };
+                const a=r(2,6), b=r(2,5), power = r(1,2);
+                const q = `${fmt(a,`x${power === 2 ? '^2' : ''}`)} \\times ${fmt(b,"xy")}`;
+                const aStr = `${toFrac(a*b)}x^{${power+1}}y`;
+                return { q, aStr, choices: [aStr, `${toFrac(a+b)}x^{${power+1}}y`, `${toFrac(a*b)}xy^{2}`, `${toFrac(a*b)}x^{2}`] };
+            } else if (type === 2) {
+                const a=r(10,24), b=r(2,4);
+                const q = `${a}x^2y \\div ${b}xy`;
+                const aStr = `${toFrac(a/b)}x`;
+                return { q, aStr, choices: [aStr, `${toFrac(a-b)}x`, `${toFrac(a/b)}y`, `${toFrac(a*b)}x^2`] };
             } else {
-                const x=r(2,3), y=2, k=r(2,3);
-                const q = `x=${x}, y=${y} \\text{ のとき } ${k}(x+2y)-${k}x`;
-                const val = k*(x+2*y) - k*x;
-                return { q, aStr: val.toString(), choices: [val.toString(), (val+2).toString(), (val*2).toString(), "0"] };
+                const x=r(-3,3), y=r(1,4), k=r(2,5);
+                const q = `x=${x}, y=${y} \\text{ のとき } ${k}(2x+y)-${k*2}x`;
+                const val = k*(2*x+y) - (k*2*x);
+                if (val === 0) return generators.shiki(false);
+                return { q, aStr: toFrac(val), choices: [toFrac(val), toFrac(val+k), toFrac(val*2), "1"] };
             }
         },
         renritsu: (isBoss) => {
-            const r = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+            const r = (min, max) => {
+                let res = Math.floor(Math.random() * (max - min + 1)) + min;
+                return res === 0 ? r(min, max) : res;
+            };
             const rS = () => (Math.random() > 0.5 ? 1 : -1);
-            let x = r(-3, 3), y = r(-3, 3);
-            if (x === 0 && y === 0) x = 1;
+            let x = r(-5, 5), y = r(-5, 5);
             let q = "";
             if (isBoss) {
-                const d = r(2, 3); 
-                const c1_num = x + d * y;
-                const c1_den = d;
-                const a2 = r(1, 2), b2 = rS(), c2 = a2 * x + b2 * y;
-                q = `\\begin{cases} \\frac{x}{${d}} + y = ${toFrac(c1_num/c1_den)} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${c2} \\end{cases}`;
+                const d = r(2, 5); 
+                const c1_val = x/d + y;
+                const a2 = r(2, 3), b2 = rS() * r(1,2);
+                if (c1_val === 0 || (a2*x+b2*y) === 0) return generators.renritsu(true);
+                q = `\\begin{cases} \\frac{x}{${d}} + y = ${toFrac(c1_val)} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${toFrac(a2*x+b2*y)} \\end{cases}`;
             } else {
                 const type = r(0, 2);
                 if (type === 0) {
-                    const a1=r(1,3), b1=r(1,3)*rS(), a2=r(1,3), b2=(b1==1?2:1)*rS();
-                    q = `\\begin{cases} ${fmt(a1,"x")}${fmtS(b1,"y")} = ${a1*x+b1*y} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${a2*x+b2*y} \\end{cases}`;
+                    const a1=r(1,4), b1=r(1,4)*rS(), a2=r(1,4), b2=(Math.abs(b1)<=1?r(2,4):1)*rS();
+                    if ((a1*x+b1*y) === 0 || (a2*x+b2*y) === 0) return generators.renritsu(false);
+                    q = `\\begin{cases} ${fmt(a1,"x")}${fmtS(b1,"y")} = ${toFrac(a1*x+b1*y)} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${toFrac(a2*x+b2*y)} \\end{cases}`;
                 } else if (type === 1) {
-                    const a=r(1,2)*rS(), b=y-(a*x), a2=r(1,2), b2=r(1,2)*rS();
-                    q = `\\begin{cases} y = ${fmt(a,"x")}${fmtS(b)} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${a2*x+b2*y} \\end{cases}`;
+                    const a=r(1,3)*rS(), b=y-(a*x);
+                    const a2=r(1,3), b2=r(1,2)*rS();
+                    if (b === 0 || (a2*x+b2*y) === 0) return generators.renritsu(false);
+                    q = `\\begin{cases} y = ${fmt(a,"x")}${fmtS(b)} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${toFrac(a2*x+b2*y)} \\end{cases}`;
                 } else {
-                    const k=2, b1=r(1,2), a2=r(1,2), b2=r(1,2)*rS();
-                    q = `\\begin{cases} ${k}(x+y)${fmtS(b1,"x")} = ${k*(x+y)+b1*x} \\\\ ${fmt(a2,"x")}${fmtS(b2,"y")} = ${a2*x+b2*y} \\end{cases}`;
+                    const k=r(2,3), b1=r(1,3);
+                    if ((k*(x+y)+b1*x) === 0 || (x-y) === 0) return generators.renritsu(false);
+                    q = `\\begin{cases} ${k}(x+y)${fmtS(b1,"x")} = ${toFrac(k*(x+y)+b1*x)} \\\\ x - y = ${toFrac(x-y)} \\end{cases}`;
                 }
             }
-            const aStr = `x=${x}, y=${y}`;
-            return { q, aStr, choices: [aStr, `x=${y}, y=${x}`, `x=${x+rS()}, y=${y}`, `x=${x}, y=${y+rS()}`] };
+            const aStr = `x=${toFrac(x)}, y=${toFrac(y)}`;
+            return { q, aStr, choices: [aStr, `x=${toFrac(y)}, y=${toFrac(x)}`, `x=${toFrac(x+rS())}, y=${toFrac(y)}`, `x=${toFrac(x)}, y=${toFrac(y+rS())}`] };
         },
         kansuu: (isBoss) => {
-            const r = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+            const r = (min, max) => {
+                let res = Math.floor(Math.random() * (max - min + 1)) + min;
+                return res === 0 ? r(min, max) : res;
+            };
             const rS = () => (Math.random() > 0.5 ? 1 : -1);
-            const type = r(0, 4);
+            const type = r(0, 5);
             let q = "", aStr = "", choices = [];
-            let a = r(1, 4) * rS(), b = r(-5, 5);
+            
             if (isBoss) {
-                const d = r(2, 3), n = r(1, 3) * rS();
+                const d = r(2, 5), n = r(1, 4) * rS(), b = r(-6, 6);
                 const a_frac = toFrac(n/d);
-                if (type === 0) {
-                    const xRange = d * 2, v1 = b, v2 = n * 2 + b;
-                    const yMin = Math.min(v1, v2), yMax = Math.max(v1, v2);
-                    q = `${fmtEq(a_frac, b)} \\text{ で、 } x \\text{ の変域が } 0 \\le x \\le ${xRange} \\text{ のときの } y \\text{ の変域は？}`;
+                if (type <= 1) {
+                    const xStart = r(1,2), xRange = xStart + d;
+                    const v1 = (n/d) * xStart + b, v2 = (n/d) * xRange + b;
+                    if (v1 === 0 || v2 === 0) return generators.kansuu(true);
+                    const yMin = toFrac(Math.min(v1, v2)), yMax = toFrac(Math.max(v1, v2));
+                    q = `${fmtEq(a_frac, b)} \\text{ で } x \\text{ の変域が } ${toFrac(xStart)} \\le x \\le ${toFrac(xRange)} \\text{ のときの } y \\text{ の変域は？}`;
                     aStr = `${yMin} \\le y \\le ${yMax}`;
-                    choices = [aStr, `${yMin} < y < ${yMax}`, `${-yMax} \\le y \\le ${-yMin}`, `0 \\le y \\le ${yMax}`];
-                } else if (type === 4) {
-                    q = `2 \\text{点 } (${d}, ${n + b}), (0, ${b}) \\text{ を通る直線の式は？}`;
-                    aStr = fmtEq(a_frac, b);
-                    choices = [aStr, fmtEq(toFrac(-n/d), b), fmtEq(a_frac, -b), `y = ${d}x${fmtS(n)}` ];
+                    choices = [aStr, `${yMin} < y < ${yMax}`, `${toFrac(-v2)} \\le y \\le ${toFrac(-v1)}`, `1 \\le y \\le ${yMax}`];
                 } else {
-                    q = `\\text{変化の割合が } ${a_frac} \\text{ で、点 } (${d}, ${n + b}) \\text{ を通る直線の式は？}`;
+                    const x1 = r(1,3), y1 = (n/d)*x1 + b;
+                    if (y1 === 0) return generators.kansuu(true);
+                    q = `\\text{変化の割合が } ${a_frac} \\text{ で、点 } (${toFrac(x1)}, ${toFrac(y1)}) \\text{ を通る直線の式は？}`;
                     aStr = fmtEq(a_frac, b);
                     choices = [aStr, fmtEq(a_frac, -b), fmtEq(toFrac(-n/d), b), `y = x${fmtS(b)}` ];
                 }
             } else {
+                let a = r(1, 5) * rS(), b = r(-8, 8);
                 if (type === 0) {
-                    const x1 = 1, x2 = 4, v1 = a*x1+b, v2 = a*x2+b;
-                    const yMin = Math.min(v1, v2), yMax = Math.max(v1, v2);
-                    q = `${fmtEq(a.toString(), b)} \\text{ で、 } x \\text{ の変域が } ${x1} \\le x \\le ${x2} \\text{ のときの } y \\text{ の変域は？}`;
+                    const x1 = r(-4,-1), x2 = r(1,4), v1 = a*x1+b, v2 = a*x2+b;
+                    if (v1 === 0 || v2 === 0) return generators.kansuu(false);
+                    const yMin = toFrac(Math.min(v1, v2)), yMax = toFrac(Math.max(v1, v2));
+                    q = `${fmtEq(toFrac(a), b)} \\text{ で } x \\text{ の変域が } ${toFrac(x1)} \\le x \\le ${toFrac(x2)} \\text{ のときの } y \\text{ の変域は？}`;
                     aStr = `${yMin} \\le y \\le ${yMax}`;
-                    choices = [aStr, `${yMin} < y < ${yMax}`, `${-yMax} \\le y \\le ${-yMin}`, `y = ${a+b}`];
-                } else if (type === 1) {
-                    q = `\\text{変化の割合が } ${a} \\text{ で、 } x=2 \\text{ のとき } y=${a*2+b} \\text{ となる直線の式は？}`;
-                    aStr = fmtEq(a.toString(), b);
-                } else if (type === 2) {
-                    q = `\\text{傾きが } ${a} \\text{ で、点 } (1, ${a+b}) \\text{ を通る直線の式は？}`;
-                    aStr = fmtEq(a.toString(), b);
-                } else if (type === 3) {
-                    q = `\\text{切片が } ${b} \\text{ で、点 } (2, ${a*2+b}) \\text{ を通る直線の式は？}`;
-                    aStr = fmtEq(a.toString(), b);
+                    choices = [aStr, `${yMin} < y < ${yMax}`, `${toFrac(-Math.max(v1,v2))} \\le y \\le ${toFrac(-Math.min(v1,v2))}`, `y = ${toFrac(a+b)}`];
+                } else if (type === 1 || type === 2) {
+                    if ((a+b) === 0) return generators.kansuu(false);
+                    q = `\\text{傾きが } ${toFrac(a)} \\text{ で点 } (1, ${toFrac(a+b)}) \\text{ を通る直線の式は？}`;
+                    aStr = fmtEq(toFrac(a), b);
                 } else {
-                    q = `2 \\text{点 } (1, ${a+b}), (2, ${a*2+b}) \\text{ を通る直線の式は？}`;
-                    aStr = fmtEq(a.toString(), b);
+                    const x1 = 1, y1 = a*x1+b, x2 = 3, y2 = a*x2+b;
+                    if (y1 === 0 || y2 === 0) return generators.kansuu(false);
+                    q = `2 \\text{点 } (${toFrac(x1)}, ${toFrac(y1)}), (${toFrac(x2)}, ${toFrac(y2)}) \\text{ を通る直線の式は？}`;
+                    aStr = fmtEq(toFrac(a), b);
                 }
-                if (choices.length === 0) choices = [aStr, fmtEq((-a).toString(), b), fmtEq(a.toString(), -b), fmtEq(b.toString(), a)];
+                if (choices.length === 0) choices = [aStr, fmtEq(toFrac(-a), b), fmtEq(toFrac(a), -b), fmtEq(toFrac(r(1,5)), a)];
             }
             return { q, aStr, choices };
         }
     };
 
     function startGame(mode) {
-        state = { hp: 100, combo: 0, timeLeft: 180, timer: null, currentQ: null, isLocked: false, correctCount: 0, mode: mode, history: [] };
+        let selectedModes = [];
+        if (mode === 'challenge') {
+            const checks = document.querySelectorAll('.boss-check:checked');
+            checks.forEach(c => selectedModes.push(c.value));
+            if (selectedModes.length === 0) {
+                alert("少なくとも1つの単元を選択してください。");
+                return;
+            }
+        }
+
+        state = { 
+            hp: 100, combo: 0, timeLeft: 180, timer: null, currentQ: null, 
+            isLocked: false, correctCount: 0, mode: mode, history: [],
+            selectedBossModes: selectedModes 
+        };
+
         document.getElementById('screen-menu').classList.add('hidden');
         document.getElementById('screen-game').classList.remove('hidden');
+        document.getElementById('hp-fill').style.width = `100%`;
+        document.getElementById('hp-label').innerText = `LIFE: 4`;
         state.timer = setInterval(tick, 1000);
         nextQuestion();
     }
+
     function tick() {
         state.timeLeft--;
         const m = Math.floor(state.timeLeft / 60), s = Math.floor(state.timeLeft % 60);
@@ -249,16 +317,22 @@
         if (state.timeLeft <= 0) endGame("MISSION FAILED", false);
         if (state.timeLeft >= 300) endGame("TIME GOAL!", true);
     }
+
     function nextQuestion() {
         state.isLocked = false;
         if (state.mode === 'challenge') {
             state.isBoss = true;
-            state.currentQ = generators[AVAILABLE_MODES[Math.floor(Math.random() * AVAILABLE_MODES.length)]](true);
+            const randomMode = state.selectedBossModes[Math.floor(Math.random() * state.selectedBossModes.length)];
+            state.currentQ = generators[randomMode](true);
         } else {
             state.isBoss = (state.correctCount > 0 && (state.correctCount + 1) % 5 === 0);
             state.currentQ = generators[state.mode](state.isBoss);
         }
         document.getElementById('boss-label').classList.toggle('hidden', !state.isBoss);
+        document.getElementById('question-text').classList.remove('hidden');
+        document.getElementById('guide-text').classList.remove('hidden');
+        document.getElementById('hidden-msg').classList.add('hidden');
+        
         document.getElementById('game-wrap').classList.toggle('boss-mode', state.isBoss);
         document.getElementById('btn-show-choices').classList.remove('hidden');
         document.getElementById('choice-area').classList.add('hidden');
@@ -269,13 +343,20 @@
 
     function showChoices() {
         document.getElementById('btn-show-choices').classList.add('hidden');
+        document.getElementById('question-text').classList.add('hidden');
+        document.getElementById('guide-text').classList.add('hidden');
+        document.getElementById('boss-label').classList.add('hidden');
+        document.getElementById('hidden-msg').classList.remove('hidden');
+
         const area = document.getElementById('choice-area');
         area.innerHTML = ''; area.classList.remove('hidden');
         let uniqueList = [];
         let seenDisplay = new Set();
         const correctVal = state.currentQ.aStr;
+        
         uniqueList.push({ val: correctVal, display: correctVal, isCorrect: true });
         seenDisplay.add(correctVal);
+        
         for (let c of (state.currentQ.choices || [])) {
             if (!seenDisplay.has(c) && uniqueList.length < 4) {
                 uniqueList.push({ val: c, display: c, isCorrect: false });
@@ -283,9 +364,10 @@
             }
         }
         while (uniqueList.length < 4) {
-            let dummy = `y = ${Math.floor(Math.random()*5+1)}x${fmtS(Math.floor(Math.random()*10-5))}`;
+            let dummy = `y = ${toFrac(Math.floor(Math.random()*7+2))}x${fmtS(Math.floor(Math.random()*16-8) || 1)}`;
             if (!seenDisplay.has(dummy)) { uniqueList.push({ val: dummy, display: dummy, isCorrect: false }); seenDisplay.add(dummy); }
         }
+        
         uniqueList.sort(() => Math.random() - 0.5).forEach(item => {
             const btn = document.createElement('button');
             btn.className = 'btn btn-choice';
@@ -301,6 +383,10 @@
         if (state.isLocked) return;
         state.isLocked = true;
         state.history.push({ q: state.currentQ.q, correct: isCorrect, userAns: selected, correctAns: state.currentQ.aStr });
+        
+        document.getElementById('question-text').classList.remove('hidden');
+        document.getElementById('hidden-msg').classList.add('hidden');
+
         if (isCorrect) {
             btn.classList.add('correct'); state.combo++; state.correctCount++; 
             const bonus = (state.mode === 'challenge') ? 30 : 15;
@@ -318,9 +404,21 @@
         if (state.hp <= 0) setTimeout(() => endGame("GAME OVER", false), 600);
         else document.getElementById('btn-next').classList.remove('hidden');
     }
+
     function endGame(title, isClear) {
         clearInterval(state.timer);
-        if(isClear) sessionStorage.setItem('clear_' + state.mode, 'true');
+        
+        if(isClear) {
+            if (state.mode === 'challenge') {
+                // 全ての単元が選択されている場合のみ王冠を付与
+                if (state.selectedBossModes.length === AVAILABLE_MODES.length) {
+                    sessionStorage.setItem('clear_' + state.mode, 'true');
+                }
+            } else {
+                sessionStorage.setItem('clear_' + state.mode, 'true');
+            }
+        }
+
         document.getElementById('screen-game').classList.add('hidden');
         document.getElementById('screen-result').classList.remove('hidden');
         document.getElementById('result-title').innerText = title;
@@ -333,6 +431,7 @@
         state.history.forEach((item, index) => {
             const logItem = document.createElement('div');
             logItem.className = 'log-item';
+            logItem.style.marginBottom = "10px";
             logItem.style.color = item.correct ? 'var(--success)' : 'var(--danger)';
             logItem.innerHTML = `${item.correct ? '◯' : '×'} 問${index+1}: \\(${item.q}\\)<br>${item.correct ? '正解: ' : '不正解! あなた: '}\\(${item.userAns}\\) → 正解: \\(${item.correctAns}\\)`;
             logArea.prepend(logItem);
@@ -344,7 +443,7 @@
         if (e.key === 'Enter') {
             const nextBtn = document.getElementById('btn-next');
             if (!nextBtn.classList.contains('hidden')) nextQuestion();
-            else if (!document.getElementById('btn-show-choices').classList.contains('hidden')) showChoices();
+            else if (!document.getElementById('btn-show-choices').classList.contains('hidden') && document.getElementById('screen-game').classList.contains('hidden') === false) showChoices();
         }
     });
 </script>
